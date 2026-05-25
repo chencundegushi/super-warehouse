@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 # SQL 生成系统提示词
 SYSTEM_PROMPT = """你是一个专业的 Apache Doris SQL 生成助手。你的任务是根据用户的自然语言查询需求，结合提供的数据库表结构（DDL），生成正确的 Doris SQL 语句。
 
+当前时间：{current_time}
+用户说"最近一周"、"昨天"、"上个月"等相对时间时，请基于当前时间计算出具体日期范围。
+
 规则：
 1. 只使用提供的 DDL 中定义的表和列，不要引用不存在的表或列
 2. 生成的 SQL 必须兼容 Apache Doris 语法
@@ -208,6 +211,11 @@ class SQLGenerator:
             "Calling LLM, model=%s, message_length=%d",
             self.model, len(user_message),
         )
+
+        # 注入当前时间到系统提示词
+        from datetime import datetime
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        system_prompt = system_prompt.format(current_time=current_time)
 
         try:
             response = self.client.chat.completions.create(

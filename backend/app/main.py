@@ -94,6 +94,10 @@ def _register_routes(app: FastAPI) -> None:
     from app.api.skills import router as skills_router
     app.include_router(skills_router)
 
+    # 注册文件型技能管理路由
+    from app.api.skill_files import router as skill_files_router
+    app.include_router(skill_files_router)
+
     # 注册查询执行路由
     from app.api.query import router as query_router
     app.include_router(query_router)

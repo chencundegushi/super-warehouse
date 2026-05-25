@@ -209,6 +209,8 @@ async def create_metric(request: MetricCreateInput) -> MetricResponse:
     - 用途说明不超过512字符
     - 参数数量不超过20个
 
+    创建成功后自动刷新 Agent 工具列表。
+
     Args:
         request: 指标创建输入
 
@@ -224,6 +226,11 @@ async def create_metric(request: MetricCreateInput) -> MetricResponse:
         metric = await metric_engine.create_metric(request)
         response = await _build_metric_response(metric)
         logger.info("Metric created, id=%s, name=%s", metric.id, metric.name)
+
+        # 刷新 Agent 工具列表
+        from app.services.agent_orchestrator import agent_orchestrator
+        await agent_orchestrator.refresh_tools()
+
         return response
     except MetricValidationError as e:
         logger.warning(
@@ -304,6 +311,7 @@ async def update_metric(
     """更新指定指标
 
     仅更新请求中提供的字段，验证规则同创建。
+    更新成功后自动刷新 Agent 工具列表。
 
     Args:
         metric_id: 指标ID
@@ -321,6 +329,11 @@ async def update_metric(
         metric = await metric_engine.update_metric(metric_id, request)
         response = await _build_metric_response(metric)
         logger.info("Metric updated, id=%s", metric_id)
+
+        # 刷新 Agent 工具列表
+        from app.services.agent_orchestrator import agent_orchestrator
+        await agent_orchestrator.refresh_tools()
+
         return response
     except MetricNotFoundError:
         logger.warning("Metric not found for update, id=%s", metric_id)
@@ -337,6 +350,8 @@ async def update_metric(
 async def delete_metric(metric_id: str) -> None:
     """删除指定指标及其所有参数
 
+    删除成功后自动刷新 Agent 工具列表。
+
     Args:
         metric_id: 指标ID
 
@@ -348,6 +363,11 @@ async def delete_metric(metric_id: str) -> None:
     try:
         await metric_engine.delete_metric(metric_id)
         logger.info("Metric deleted, id=%s", metric_id)
+
+        # 刷新 Agent 工具列表
+        from app.services.agent_orchestrator import agent_orchestrator
+        await agent_orchestrator.refresh_tools()
+
     except MetricNotFoundError:
         logger.warning("Metric not found for deletion, id=%s", metric_id)
         raise HTTPException(status_code=404, detail="Metric not found")

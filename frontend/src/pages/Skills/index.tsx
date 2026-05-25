@@ -1,81 +1,67 @@
 /**
  * 技能管理页面
- * 提供技能列表展示、导入、编辑、导出、删除等完整管理功能。
- * 支持 .md/.txt 格式文件上传，单个文件不超过 1MB。
+ * 支持文件型技能（目录导入）的管理，包括：
+ * - 目录上传导入（webkitdirectory）
+ * - 技能列表展示
+ * - 技能详情查看（SKILL.md 内容 + 文件列表）
+ * - 技能删除
  *
  * @module SkillsPage
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Card,
   List,
   Button,
-  Upload,
   Modal,
-  Input,
   Popconfirm,
   message,
   Space,
   Typography,
   Empty,
   Spin,
+  Tag,
+  Tabs,
 } from 'antd'
 import {
   ThunderboltOutlined,
-  UploadOutlined,
-  EditOutlined,
-  ExportOutlined,
+  FolderOpenOutlined,
   DeleteOutlined,
-  PlayCircleOutlined,
+  FileTextOutlined,
+  CodeOutlined,
+  EyeOutlined,
 } from '@ant-design/icons'
-import type { UploadProps } from 'antd'
-import type { Skill, SkillListItem } from '@/types'
 import {
-  listSkills,
-  importSkill,
-  updateSkill,
-  deleteSkill,
-  exportSkill,
-  getSkill,
-} from '@/services/skillApi'
-import SkillExecutionPanel from '@/components/SkillExecutionPanel'
+  listSkillFiles,
+  getSkillFileDetail,
+  importSkillDirectory,
+  deleteSkillFile,
+  type SkillFileInfo,
+  type SkillFileDetail,
+} from '@/services/skillFileApi'
 
-const { Title } = Typography
-const { TextArea } = Input
-
-/** 文件大小上限：1MB */
-const MAX_FILE_SIZE = 1 * 1024 * 1024
+const { Title, Text, Paragraph } = Typography
 
 /**
  * 技能管理页面组件
- * 实现技能列表展示、导入、编辑、导出、删除操作
  */
 function SkillsPage() {
-  // 1.技能列表数据
-  const [skills, setSkills] = useState<SkillListItem[]>([])
-  // 2.加载状态
+  const [skills, setSkills] = useState<SkillFileInfo[]>([])
   const [loading, setLoading] = useState(false)
-  // 3.编辑弹窗可见性
-  const [editModalVisible, setEditModalVisible] = useState(false)
-  // 4.当前编辑的技能
-  const [editingSkill, setEditingSkill] = useState<SkillListItem | null>(null)
-  // 5.编辑表单字段
-  const [editName, setEditName] = useState('')
-  const [editDescription, setEditDescription] = useState('')
-  // 6.当前选中执行的技能（需要完整信息）
-  const [executingSkill, setExecutingSkill] = useState<Skill | null>(null)
+  const [importing, setImporting] = useState(false)
+  // 详情弹窗
+  const [detailVisible, setDetailVisible] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailData, setDetailData] = useState<SkillFileDetail | null>(null)
+  // 目录上传 input ref
+  const dirInputRef = useRef<HTMLInputElement>(null)
 
-  /**
-   * 加载技能列表
-   * 调用后端接口获取所有已导入的技能
-   */
+  /** 加载技能列表 */
   const fetchSkills = useCallback(async () => {
-    console.log('[SkillsPage] Fetching skills list')
     setLoading(true)
     try {
-      const data = await listSkills()
+      const data = await listSkillFiles()
       setSkills(data)
-      console.log('[SkillsPage] Skills loaded, count:', data.length)
     } catch (err) {
       console.error('[SkillsPage] Failed to fetch skills:', err)
       message.error('加载技能列表失败')
@@ -84,144 +70,61 @@ function SkillsPage() {
     }
   }, [])
 
-  // 6.页面挂载时加载技能列表
-  useEffect(() => {
-    fetchSkills()
-  }, [fetchSkills])
+  useEffect(() => { fetchSkills() }, [fetchSkills])
 
-  /**
-   * 处理文件上传前的校验
-   * 检查文件大小是否超过 1MB 限制
-   *
-   * @param file - 待上传的文件
-   * @returns false 阻止默认上传行为，手动处理
-   */
-  const handleBeforeUpload: UploadProps['beforeUpload'] = (file) => {
-    console.log('[SkillsPage] Upload file check, name:', file.name, 'size:', file.size)
-    // 1.校验文件大小
-    if (file.size > MAX_FILE_SIZE) {
-      message.error('文件大小不能超过 1MB')
-      return Upload.LIST_IGNORE
+  /** 处理目录选择上传 */
+  const handleDirectorySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+
+    // 检查是否包含 SKILL.md
+    const hasSkillMd = Array.from(files).some(f =>
+      (f as any).webkitRelativePath?.endsWith('SKILL.md') || f.name === 'SKILL.md'
+    )
+    if (!hasSkillMd) {
+      message.error('所选目录中缺少 SKILL.md 文件')
+      e.target.value = ''
+      return
     }
-    // 2.读取文件内容并调用导入接口
-    handleImportFile(file)
-    return false
-  }
 
-  /**
-   * 读取文件内容并调用导入接口
-   * 使用 FileReader 读取文件文本内容，然后调用 skillApi.importSkill
-   *
-   * @param file - 用户选择的文件对象
-   */
-  const handleImportFile = async (file: File) => {
-    console.log('[SkillsPage] Importing skill file:', file.name)
+    setImporting(true)
     try {
-      const content = await readFileContent(file)
-      // 1.提取文件名（去掉扩展名）作为技能名称
-      const name = file.name.replace(/\.(md|txt)$/i, '')
-      await importSkill({ name, content, format: 'claude-skill' })
-      message.success('技能导入成功')
-      // 2.刷新列表
+      const result = await importSkillDirectory(files)
+      message.success(`技能「${result.displayName}」导入成功`)
       fetchSkills()
-    } catch (err) {
-      console.error('[SkillsPage] Import skill failed:', err)
-      message.error('技能导入失败')
+    } catch (err: any) {
+      console.error('[SkillsPage] Import failed:', err)
+      message.error(err.message || '导入失败')
+    } finally {
+      setImporting(false)
+      e.target.value = ''
     }
   }
 
-  /**
-   * 读取文件文本内容
-   * @param file - 文件对象
-   * @returns 文件文本内容
-   */
-  const readFileContent = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result as string)
-      reader.onerror = () => reject(new Error('文件读取失败'))
-      reader.readAsText(file)
-    })
-  }
-
-  /**
-   * 打开编辑弹窗
-   * @param skill - 要编辑的技能
-   */
-  const handleEdit = (skill: SkillListItem) => {
-    console.log('[SkillsPage] Opening edit modal, skill:', skill.name)
-    setEditingSkill(skill)
-    setEditName(skill.name)
-    setEditDescription(skill.description || '')
-    setEditModalVisible(true)
-  }
-
-  /**
-   * 提交编辑表单
-   * 调用 updateSkill 接口保存修改
-   */
-  const handleEditSubmit = async () => {
-    if (!editingSkill) return
-    console.log('[SkillsPage] Submitting edit, skill id:', editingSkill.id)
+  /** 查看技能详情 */
+  const handleViewDetail = async (skill: SkillFileInfo) => {
+    setDetailVisible(true)
+    setDetailLoading(true)
     try {
-      await updateSkill(editingSkill.id, {
-        name: editName,
-        description: editDescription,
-      })
-      message.success('技能更新成功')
-      setEditModalVisible(false)
-      setEditingSkill(null)
-      // 1.刷新列表
-      fetchSkills()
+      const detail = await getSkillFileDetail(skill.name)
+      setDetailData(detail)
     } catch (err) {
-      console.error('[SkillsPage] Update skill failed:', err)
-      message.error('技能更新失败')
+      console.error('[SkillsPage] Failed to get detail:', err)
+      message.error('获取技能详情失败')
+    } finally {
+      setDetailLoading(false)
     }
   }
 
-  /**
-   * 导出技能
-   * 调用 exportSkill 接口获取文件内容，触发浏览器下载
-   *
-   * @param skill - 要导出的技能
-   */
-  const handleExport = async (skill: SkillListItem) => {
-    console.log('[SkillsPage] Exporting skill:', skill.name)
+  /** 删除技能 */
+  const handleDelete = async (skill: SkillFileInfo) => {
     try {
-      const fileData = await exportSkill(skill.id)
-      // 1.创建 Blob 并触发下载
-      const blob = new Blob([fileData.content], { type: 'text/plain;charset=utf-8' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${fileData.name}.md`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(url)
-      message.success('技能导出成功')
-    } catch (err) {
-      console.error('[SkillsPage] Export skill failed:', err)
-      message.error('技能导出失败')
-    }
-  }
-
-  /**
-   * 删除技能
-   * 调用 deleteSkill 接口删除指定技能
-   *
-   * @param skill - 要删除的技能
-   */
-  const handleDelete = async (skill: SkillListItem) => {
-    console.log('[SkillsPage] Deleting skill:', skill.name)
-    try {
-      await deleteSkill(skill.id)
+      await deleteSkillFile(skill.name)
       message.success('技能删除成功')
-      // 1.刷新列表
       fetchSkills()
     } catch (err) {
-      console.error('[SkillsPage] Delete skill failed:', err)
-      message.error('技能删除失败')
+      console.error('[SkillsPage] Delete failed:', err)
+      message.error('删除失败')
     }
   }
 
@@ -233,21 +136,33 @@ function SkillsPage() {
           <ThunderboltOutlined style={{ marginRight: 8 }} />
           技能管理
         </Title>
-        <Upload
-          accept=".md,.txt"
-          showUploadList={false}
-          beforeUpload={handleBeforeUpload}
-        >
-          <Button type="primary" icon={<UploadOutlined />}>
-            导入技能
+        <Space>
+          <Button
+            type="primary"
+            icon={<FolderOpenOutlined />}
+            loading={importing}
+            onClick={() => dirInputRef.current?.click()}
+          >
+            导入技能目录
           </Button>
-        </Upload>
+          {/* 隐藏的目录选择 input */}
+          <input
+            ref={dirInputRef}
+            type="file"
+            // @ts-ignore webkitdirectory is non-standard
+            webkitdirectory=""
+            directory=""
+            multiple
+            style={{ display: 'none' }}
+            onChange={handleDirectorySelect}
+          />
+        </Space>
       </div>
 
       {/* 技能列表 */}
       <Spin spinning={loading}>
         {skills.length === 0 && !loading ? (
-          <Empty description="暂无技能，请点击「导入技能」添加" />
+          <Empty description="暂无技能，点击「导入技能目录」选择包含 SKILL.md 的目录导入" />
         ) : (
           <List
             grid={{ gutter: 16, xs: 1, sm: 1, md: 2, lg: 3, xl: 3, xxl: 4 }}
@@ -255,26 +170,19 @@ function SkillsPage() {
             renderItem={(skill) => (
               <List.Item>
                 <Card
-                  title={skill.name}
+                  title={
+                    <Space>
+                      <span>{skill.displayName}</span>
+                      {skill.hasScript && <Tag color="blue" style={{ fontSize: 11 }}>含脚本</Tag>}
+                    </Space>
+                  }
                   hoverable
                   actions={[
-                    <PlayCircleOutlined key="execute" onClick={async () => {
-                      console.log('[SkillsPage] Opening execution panel, skill:', skill.name)
-                      try {
-                        // 获取完整技能信息（含 content 和 parameters）
-                        const fullSkill = await getSkill(skill.id)
-                        setExecutingSkill(fullSkill)
-                      } catch (err) {
-                        console.error('[SkillsPage] Failed to get skill details:', err)
-                        message.error('获取技能详情失败')
-                      }
-                    }} />,
-                    <EditOutlined key="edit" onClick={() => handleEdit(skill)} />,
-                    <ExportOutlined key="export" onClick={() => handleExport(skill)} />,
+                    <EyeOutlined key="view" onClick={() => handleViewDetail(skill)} />,
                     <Popconfirm
                       key="delete"
                       title="确认删除"
-                      description={`确定要删除技能「${skill.name}」吗？`}
+                      description={`确定要删除技能「${skill.displayName}」吗？`}
                       onConfirm={() => handleDelete(skill)}
                       okText="确认"
                       cancelText="取消"
@@ -284,7 +192,17 @@ function SkillsPage() {
                   ]}
                 >
                   <Card.Meta
-                    description={skill.description || '暂无描述'}
+                    description={
+                      <div>
+                        <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 8, color: '#999' }}>
+                          {skill.description || '暂无描述'}
+                        </Paragraph>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          <FileTextOutlined style={{ marginRight: 4 }} />
+                          {skill.files.length} 个文件
+                        </Text>
+                      </div>
+                    }
                   />
                 </Card>
               </List.Item>
@@ -293,55 +211,56 @@ function SkillsPage() {
         )}
       </Spin>
 
-      {/* 编辑弹窗 */}
+      {/* 详情弹窗 */}
       <Modal
-        title="编辑技能"
-        open={editModalVisible}
-        onOk={handleEditSubmit}
-        onCancel={() => {
-          setEditModalVisible(false)
-          setEditingSkill(null)
-        }}
-        okText="保存"
-        cancelText="取消"
-      >
-        <Space direction="vertical" style={{ width: '100%' }} size="middle">
-          <div>
-            <div style={{ marginBottom: 4 }}>技能名称</div>
-            <Input
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              placeholder="请输入技能名称"
-              maxLength={128}
-            />
-          </div>
-          <div>
-            <div style={{ marginBottom: 4 }}>技能描述</div>
-            <TextArea
-              value={editDescription}
-              onChange={(e) => setEditDescription(e.target.value)}
-              placeholder="请输入技能描述"
-              rows={4}
-            />
-          </div>
-        </Space>
-      </Modal>
-
-      {/* 技能执行面板弹窗 */}
-      <Modal
-        title={null}
-        open={!!executingSkill}
-        onCancel={() => setExecutingSkill(null)}
+        title={detailData ? `技能详情 — ${detailData.displayName}` : '技能详情'}
+        open={detailVisible}
+        onCancel={() => { setDetailVisible(false); setDetailData(null) }}
         footer={null}
-        width={720}
+        width={800}
         destroyOnClose
       >
-        {executingSkill && (
-          <SkillExecutionPanel
-            skill={executingSkill}
-            onClose={() => setExecutingSkill(null)}
-          />
-        )}
+        {detailLoading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+        ) : detailData ? (
+          <div>
+            {/* 基本信息 */}
+            <div style={{ marginBottom: 16 }}>
+              <Text strong>描述：</Text>
+              <Text>{detailData.description || '无'}</Text>
+            </div>
+
+            {/* 文件内容 Tabs */}
+            <Tabs
+              defaultActiveKey="skill_md"
+              items={detailData.files.map((file) => ({
+                key: file.name,
+                label: (
+                  <span>
+                    {file.name.endsWith('.py') ? <CodeOutlined style={{ marginRight: 4 }} /> : <FileTextOutlined style={{ marginRight: 4 }} />}
+                    {file.name}
+                  </span>
+                ),
+                children: (
+                  <pre style={{
+                    background: '#1a1a1a',
+                    padding: 16,
+                    borderRadius: 8,
+                    overflow: 'auto',
+                    maxHeight: 500,
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                    color: '#e0e0e0',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}>
+                    {file.content || '(无法读取内容)'}
+                  </pre>
+                ),
+              }))}
+            />
+          </div>
+        ) : null}
       </Modal>
     </div>
   )

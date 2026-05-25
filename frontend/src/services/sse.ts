@@ -68,6 +68,11 @@ export function createSSEConnection(
       while (true) {
         const { done, value } = await reader.read()
         if (done) {
+          // 3.流结束前处理缓冲区中剩余的事件数据
+          if (buffer.trim()) {
+            console.log('[SSE] Processing remaining buffer before complete')
+            parseSSEEvent(buffer, callbacks)
+          }
           console.log('[SSE] Stream completed')
           callbacks.onComplete()
           break
@@ -75,7 +80,7 @@ export function createSSEConnection(
 
         buffer += decoder.decode(value, { stream: true })
 
-        // 3.按 SSE 协议解析事件（以双换行分隔）
+        // 4.按 SSE 协议解析事件（以双换行分隔）
         const events = buffer.split('\n\n')
         buffer = events.pop() || ''
 

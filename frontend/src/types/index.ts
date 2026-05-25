@@ -16,6 +16,7 @@ export type MessageRole = 'user' | 'agent'
 /** SSE 流事件类型 */
 export type StreamEventType =
   | 'thinking'
+  | 'tool_call'
   | 'sql_preview'
   | 'executing'
   | 'result'

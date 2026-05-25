@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 class StreamEventType(str, Enum):
     """SSE 流事件类型枚举"""
     thinking = "thinking"
+    tool_call = "tool_call"
     sql_preview = "sql_preview"
     executing = "executing"
     result = "result"

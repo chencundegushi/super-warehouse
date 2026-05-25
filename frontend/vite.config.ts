@@ -26,6 +26,8 @@ export default defineConfig({
               // 确保不缓冲 SSE 响应
               proxyRes.headers['cache-control'] = 'no-cache'
               proxyRes.headers['x-accel-buffering'] = 'no'
+              // 禁用分块编码压缩，防止事件被合并
+              delete proxyRes.headers['content-encoding']
             }
           })
         },

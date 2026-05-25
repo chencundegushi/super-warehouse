@@ -141,7 +141,7 @@ function MainLayout() {
                 textOverflow: 'ellipsis',
               }}
             >
-              Doris Agent
+              Data Agent
             </span>
           )}
           {/* 平板端显示折叠/展开按钮 */}

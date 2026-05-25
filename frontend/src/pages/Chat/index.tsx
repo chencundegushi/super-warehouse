@@ -53,6 +53,8 @@ interface ChatMessage extends Omit<Message, 'id' | 'conversationId' | 'createdAt
   attachedResult?: QueryResult
   /** 该消息关联的图表推荐 */
   attachedChart?: ChartRecommendation
+  /** 该消息关联的工具调用记录 */
+  toolCalls?: Array<{ tool_name: string; display_name: string; args: Record<string, unknown> }>
 }
 
 /**
@@ -141,12 +143,13 @@ function ChatPage() {
     } catch (error) { console.error('[ChatPage] Cancel query error:', error) }
     finally {
       setIsLoading(false); setLoadingPhase(''); clearLongWaitTimer()
-      if (streamingMessageIdRef.current) {
+      const msgId = streamingMessageIdRef.current
+      if (msgId) {
         setMessages(prev => prev.map(msg =>
-          msg.id === streamingMessageIdRef.current ? { ...msg, isStreaming: false, content: msg.content || '查询已取消' } : msg
+          msg.id === msgId ? { ...msg, isStreaming: false, content: msg.content || '查询已取消' } : msg
         ))
-        streamingMessageIdRef.current = null
       }
+      streamingMessageIdRef.current = null
     }
   }, [clearLongWaitTimer])
 
@@ -161,16 +164,21 @@ function ChatPage() {
   const handleStreamComplete = useCallback(() => {
     console.log('[ChatPage] Stream completed, msgId:', streamingMessageIdRef.current, 'sql:', currentSQLRef.current?.substring(0, 30), 'hasResult:', !!currentResultRef.current, 'hasChart:', !!currentChartRef.current)
     setIsLoading(false); setLoadingPhase(''); clearLongWaitTimer()
-    if (streamingMessageIdRef.current) {
+    // 先将 ref 值捕获到局部变量，避免 setMessages 更新器异步执行时 ref 已被清空
+    const msgId = streamingMessageIdRef.current
+    const sql = currentSQLRef.current
+    const result = currentResultRef.current
+    const chart = currentChartRef.current
+    if (msgId) {
       const finalData: Partial<ChatMessage> = { isStreaming: false }
-      if (currentSQLRef.current) finalData.attachedSQL = currentSQLRef.current
-      if (currentResultRef.current) finalData.attachedResult = currentResultRef.current
-      if (currentChartRef.current) finalData.attachedChart = currentChartRef.current
+      if (sql) finalData.attachedSQL = sql
+      if (result) finalData.attachedResult = result
+      if (chart) finalData.attachedChart = chart
       setMessages(prev => prev.map(msg =>
-        msg.id === streamingMessageIdRef.current ? { ...msg, ...finalData } : msg
+        msg.id === msgId ? { ...msg, ...finalData } : msg
       ))
-      streamingMessageIdRef.current = null
     }
+    streamingMessageIdRef.current = null
     currentSQLRef.current = ''; currentResultRef.current = null; currentChartRef.current = null
     sseConnectionRef.current = null
     // 延迟滚动确保附加内容渲染后可见
@@ -181,13 +189,14 @@ function ChatPage() {
   const handleStreamError = useCallback((error: Error) => {
     console.error('[ChatPage] Stream error:', error.message)
     setIsLoading(false); setLoadingPhase(''); clearLongWaitTimer()
-    if (streamingMessageIdRef.current) {
+    const msgId = streamingMessageIdRef.current
+    if (msgId) {
       setMessages(prev => prev.map(msg =>
-        msg.id === streamingMessageIdRef.current
+        msg.id === msgId
           ? { ...msg, content: `❌ 连接错误: ${error.message}`, isStreaming: false } : msg
       ))
-      streamingMessageIdRef.current = null
     }
+    streamingMessageIdRef.current = null
     currentSQLRef.current = ''; currentResultRef.current = null; currentChartRef.current = null
     sseConnectionRef.current = null
   }, [clearLongWaitTimer])
@@ -203,9 +212,26 @@ function ChatPage() {
     if (LOADING_PHASE_TEXT[eventType]) setLoadingPhase(LOADING_PHASE_TEXT[eventType])
 
     switch (eventType) {
-      case 'thinking':
-        updateStreamingMessage(String(event.data || ''))
+      case 'thinking': {
+        const thinkingData = event.data as { message?: string } | string
+        const thinkingMsg = typeof thinkingData === 'string' ? thinkingData : (thinkingData?.message || '')
+        updateStreamingMessage(thinkingMsg)
         break
+      }
+      case 'tool_call': {
+        const tcData = event.data as { tool_name?: string; display_name?: string; args?: Record<string, unknown> }
+        if (tcData?.tool_name) {
+          const msgId = streamingMessageIdRef.current
+          if (msgId) {
+            setMessages(prev => prev.map(msg => {
+              if (msg.id !== msgId) return msg
+              const existing = msg.toolCalls || []
+              return { ...msg, toolCalls: [...existing, { tool_name: tcData.tool_name!, display_name: tcData.display_name || tcData.tool_name!, args: tcData.args || {} }] }
+            }))
+          }
+        }
+        break
+      }
       case 'sql_preview': {
         const data = event.data as { sql?: string; explanation?: string; source?: string }
         const sql = data?.sql || String(event.data)
@@ -329,7 +355,7 @@ function ChatPage() {
     streamingMessageIdRef.current = agentMessageId
     startLongWaitTimer()
     const connection = sendMessage(
-      { sessionId: sessionIdRef.current, message: text, conversationId: conversationId || undefined, autoExecute: !requireConfirm },
+      { sessionId: sessionIdRef.current, message: text, conversationId: conversationId || undefined, autoExecute: !requireConfirmRef.current },
       { onMessage: handleStreamEvent, onComplete: handleStreamComplete, onError: handleStreamError }
     )
     sseConnectionRef.current = connection
@@ -375,6 +401,28 @@ function ChatPage() {
                 )}
               </div>
             </div>
+            {/* 该消息关联的工具调用记录 */}
+            {msg.toolCalls && msg.toolCalls.length > 0 && (
+              <div className={styles.messageItem + ' ' + styles.agentMessage}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxWidth: '80%' }}>
+                  {msg.toolCalls.map((tc, idx) => (
+                    <span key={idx} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                      padding: '3px 10px', borderRadius: 12,
+                      background: 'rgba(22, 119, 255, 0.1)', border: '1px solid rgba(22, 119, 255, 0.3)',
+                      fontSize: 12, color: '#4096ff',
+                    }}>
+                      ⚡ {tc.display_name}
+                      {tc.args && Object.keys(tc.args).length > 0 && (
+                        <span style={{ color: '#888', marginLeft: 4 }}>
+                          ({Object.entries(tc.args).map(([k, v]) => `${k}=${v}`).join(', ')})
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* 该消息关联的SQL（可折叠） */}
             {msg.attachedSQL && !msg.isStreaming && (
               <div className={styles.messageItem + ' ' + styles.agentMessage}>
@@ -385,13 +433,13 @@ function ChatPage() {
               </div>
             )}
             {/* 该消息关联的图表（可折叠） */}
-            {msg.attachedResult && msg.attachedChart && !msg.isStreaming && (
+            {msg.attachedResult && !msg.isStreaming && (
               <div className={styles.messageItem + ' ' + styles.agentMessage}>
                 <div style={{ maxWidth: '90%', width: '100%' }}>
                   <details open style={{ background: 'var(--color-bg-elevated)', borderRadius: 8, padding: '8px 12px', border: '1px solid var(--color-border-secondary)' }}>
                     <summary style={{ cursor: 'pointer', padding: '4px 0', fontSize: 13, color: '#ccc', userSelect: 'none' }}>📊 数据可视化（点击收起/展开）</summary>
                     <div style={{ marginTop: 8 }}>
-                      <ChartView queryResult={msg.attachedResult} recommendation={msg.attachedChart} userSpecifiedType={msg.attachedChart.recommended} />
+                      <ChartView queryResult={msg.attachedResult} recommendation={msg.attachedChart} userSpecifiedType={msg.attachedChart?.recommended} />
                     </div>
                   </details>
                 </div>

@@ -8,7 +8,10 @@ sqlalchemy[asyncio]==2.0.35
 aiosqlite==0.20.0
 
 # LLM 集成
-openai==1.51.0
+openai>=1.51.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-core>=0.3.0
 
 # Apache Doris 连接（MySQL 协议兼容）
 pymysql==1.1.1
