@@ -12,6 +12,7 @@ openai>=1.51.0
 langchain>=0.3.0
 langchain-openai>=0.2.0
 langchain-core>=0.3.0
+deepagents>=0.5.8
 
 # Apache Doris 连接（MySQL 协议兼容）
 pymysql==1.1.1

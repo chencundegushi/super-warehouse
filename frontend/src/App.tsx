@@ -2,7 +2,8 @@
  * 应用根组件
  * 配置 Ant Design 深色主题、全局路由和页面布局
  */
-import { ConfigProvider, theme, App as AntApp } from 'antd'
+import { lazy, Suspense } from 'react'
+import { ConfigProvider, theme, App as AntApp, Spin } from 'antd'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import zhCN from 'antd/locale/zh_CN'
 import MainLayout from './layouts/MainLayout'
@@ -11,6 +12,13 @@ import MetricsPage from './pages/Metrics'
 import SkillsPage from './pages/Skills'
 import DDLPage from './pages/DDL'
 import HistoryPage from './pages/History'
+import LineagePage from './pages/Lineage'
+import SettingsPage from './pages/Settings'
+
+// 懒加载 Dashboard 相关页面
+const DashboardListPage = lazy(() => import('./pages/Dashboard/index'))
+const DashboardViewPage = lazy(() => import('./pages/Dashboard/DashboardView'))
+const DashboardBuilderPage = lazy(() => import('./pages/Dashboard/DashboardBuilder'))
 
 /**
  * 应用入口组件，配置全局主题和路由
@@ -52,7 +60,13 @@ function App() {
               <Route path="/metrics" element={<MetricsPage />} />
               <Route path="/skills" element={<SkillsPage />} />
               <Route path="/ddl" element={<DDLPage />} />
+              <Route path="/lineage" element={<LineagePage />} />
               <Route path="/history" element={<HistoryPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              {/* Dashboard 智能大屏路由（懒加载） */}
+              <Route path="/dashboards" element={<Suspense fallback={<Spin style={{ display: 'flex', justifyContent: 'center', marginTop: 120 }} />}><DashboardListPage /></Suspense>} />
+              <Route path="/dashboards/new" element={<Suspense fallback={<Spin style={{ display: 'flex', justifyContent: 'center', marginTop: 120 }} />}><DashboardBuilderPage /></Suspense>} />
+              <Route path="/dashboards/:id" element={<Suspense fallback={<Spin style={{ display: 'flex', justifyContent: 'center', marginTop: 120 }} />}><DashboardViewPage /></Suspense>} />
               {/* 默认重定向到对话页面 */}
               <Route path="/" element={<Navigate to="/chat" replace />} />
               <Route path="*" element={<Navigate to="/chat" replace />} />

@@ -23,6 +23,9 @@ export type StreamEventType =
   | 'chart_recommendation'
   | 'error'
   | 'clarification'
+  | 'panel_created'
+  | 'panel_updated'
+  | 'panel_removed'
 
 /** 指标参数类型 */
 export type MetricParameterType = 'string' | 'number' | 'date' | 'enum'
@@ -44,6 +47,8 @@ export interface QueryRequest {
   conversationId?: string
   /** 是否自动执行SQL（跳过确认），默认true */
   autoExecute?: boolean
+  /** Agent 工作模式，'dashboard_builder' 表示大屏构建模式 */
+  mode?: string
 }
 
 // ============================================================

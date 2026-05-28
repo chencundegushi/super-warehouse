@@ -1,0 +1,219 @@
+/**
+ * Dashboard 页面专用样式
+ * 深色主题下的 react-grid-layout 覆盖、拖拽/缩放动画、编辑模式视觉反馈、响应式布局调整
+ *
+ * @module Dashboard.css
+ */
+
+/* ============================================================
+   react-grid-layout 深色主题覆盖
+   ============================================================ */
+
+/* 网格容器基础样式 */
+.dashboard-grid-layout {
+  min-height: 200px;
+}
+
+/* 网格项目基础样式 */
+.dashboard-grid-layout .react-grid-item {
+  border-radius: var(--border-radius-lg, 8px);
+  overflow: hidden;
+  transition: box-shadow var(--transition-fast, 200ms) ease,
+              border-color var(--transition-fast, 200ms) ease,
+              transform var(--transition-fast, 200ms) ease;
+}
+
+/* 拖拽占位符样式（深色主题） */
+.dashboard-grid-layout .react-grid-placeholder {
+  background-color: var(--color-primary, #1668dc) !important;
+  opacity: 0.15 !important;
+  border-radius: var(--border-radius-lg, 8px);
+  border: 2px dashed var(--color-primary, #1668dc) !important;
+}
+
+/* 拖拽中的面板样式 */
+.dashboard-grid-layout .react-grid-item.react-draggable-dragging {
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  opacity: 0.9;
+}
+
+/* 缩放中的面板样式 */
+.dashboard-grid-layout .react-grid-item.resizing {
+  z-index: 100;
+  opacity: 0.9;
+}
+
+/* ============================================================
+   编辑模式视觉反馈
+   ============================================================ */
+
+/* 编辑模式下网格项目边框高亮 */
+.dashboard-grid-layout.edit-mode .react-grid-item {
+  border: 1px solid var(--color-border, #424242);
+  transition: border-color var(--transition-fast, 200ms) ease,
+              box-shadow var(--transition-fast, 200ms) ease;
+}
+
+/* 编辑模式下面板 hover 效果 */
+.dashboard-grid-layout.edit-mode .react-grid-item:hover {
+  border-color: var(--color-primary, #1668dc);
+  box-shadow: 0 0 0 1px var(--color-primary, #1668dc),
+              0 4px 12px rgba(22, 104, 220, 0.15);
+  cursor: grab;
+}
+
+/* 编辑模式下面板拖拽时光标 */
+.dashboard-grid-layout.edit-mode .react-grid-item:active {
+  cursor: grabbing;
+}
+
+/* 缩放手柄样式（深色主题） */
+.dashboard-grid-layout .react-resizable-handle {
+  background-image: none !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.dashboard-grid-layout .react-resizable-handle::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--color-text-tertiary, rgba(255, 255, 255, 0.45));
+  border-bottom: 2px solid var(--color-text-tertiary, rgba(255, 255, 255, 0.45));
+  transition: border-color var(--transition-fast, 200ms) ease;
+}
+
+.dashboard-grid-layout .react-resizable-handle:hover::after {
+  border-color: var(--color-primary, #1668dc);
+}
+
+/* ============================================================
+   拖拽与缩放动画过渡
+   ============================================================ */
+
+/* 面板布局移动过渡（200ms） */
+.dashboard-grid-layout .react-grid-item {
+  transition: transform var(--transition-fast, 200ms) ease,
+              width var(--transition-normal, 300ms) ease,
+              height var(--transition-normal, 300ms) ease;
+}
+
+/* 拖拽过程中禁用过渡（避免卡顿） */
+.dashboard-grid-layout .react-grid-item.cssTransforms {
+  transition-property: transform;
+  transition-duration: var(--transition-fast, 200ms);
+  transition-timing-function: ease;
+}
+
+/* 图表内容自适应缩放过渡（300ms） */
+.dashboard-grid-layout .react-grid-item .ant-card {
+  transition: width var(--transition-normal, 300ms) ease,
+              height var(--transition-normal, 300ms) ease;
+}
+
+/* 面板内图表区域缩放过渡 */
+.dashboard-grid-layout .react-grid-item .ant-card-body {
+  transition: padding var(--transition-normal, 300ms) ease;
+}
+
+/* ============================================================
+   Dashboard 面板卡片深色主题一致性
+   ============================================================ */
+
+/* 面板卡片背景与边框 */
+.dashboard-grid-layout .ant-card {
+  background: var(--color-bg-container, #1f1f1f);
+  border-color: var(--color-border-secondary, #303030);
+}
+
+/* 面板卡片头部 */
+.dashboard-grid-layout .ant-card-head {
+  background: var(--color-bg-container, #1f1f1f);
+  border-bottom-color: var(--color-border-secondary, #303030);
+  color: var(--color-text-primary, rgba(255, 255, 255, 0.88));
+}
+
+/* 面板卡片标题文字 */
+.dashboard-grid-layout .ant-card-head-title {
+  color: var(--color-text-primary, rgba(255, 255, 255, 0.88));
+}
+
+/* ============================================================
+   滚动条样式（Dashboard 网格区域）
+   ============================================================ */
+
+/* Dashboard 页面滚动容器 */
+.dashboard-scroll-container {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border, #424242) transparent;
+}
+
+.dashboard-scroll-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dashboard-scroll-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dashboard-scroll-container::-webkit-scrollbar-thumb {
+  background-color: var(--color-border, #424242);
+  border-radius: 3px;
+}
+
+.dashboard-scroll-container::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-tertiary, rgba(255, 255, 255, 0.45));
+}
+
+/* ============================================================
+   响应式布局调整
+   ============================================================ */
+
+/* 大屏（≥1400px）：正常12列布局 */
+@media (min-width: 1400px) {
+  .dashboard-grid-layout {
+    max-width: 100%;
+  }
+}
+
+/* 中等屏幕（992px - 1399px）：保持12列，缩小间距 */
+@media (max-width: 1399px) and (min-width: 992px) {
+  .dashboard-grid-layout {
+    max-width: 100%;
+  }
+
+  .dashboard-grid-layout .react-grid-item .ant-card {
+    font-size: 13px;
+  }
+}
+
+/* 小屏幕（768px - 991px）：面板最小宽度调整 */
+@media (max-width: 991px) and (min-width: 768px) {
+  .dashboard-grid-layout .react-grid-item .ant-card-head-title {
+    font-size: 13px;
+  }
+
+  .dashboard-grid-layout .react-grid-item .ant-card-body {
+    padding: 6px 8px;
+  }
+}
+
+/* 移动端（<768px）：单列布局提示 */
+@media (max-width: 767px) {
+  .dashboard-grid-layout .react-grid-item {
+    min-width: 100% !important;
+  }
+
+  .dashboard-grid-layout .react-grid-item .ant-card-head-title {
+    font-size: 12px;
+  }
+
+  .dashboard-grid-layout .react-grid-item .ant-card-body {
+    padding: 4px 8px;
+  }
+}

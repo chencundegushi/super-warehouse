@@ -106,6 +106,18 @@ def _register_routes(app: FastAPI) -> None:
     from app.api.chat import router as chat_router
     app.include_router(chat_router)
 
+    # 注册表血缘关系路由
+    from app.api.lineage import router as lineage_router
+    app.include_router(lineage_router)
+
+    # 注册系统设置路由
+    from app.api.settings import router as settings_router
+    app.include_router(settings_router)
+
+    # 注册 Dashboard 智能大屏路由
+    from app.api.dashboard import router as dashboard_router
+    app.include_router(dashboard_router)
+
     # 健康检查端点
     @app.get("/health")
     async def health_check():

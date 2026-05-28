@@ -11,6 +11,8 @@ ORM 模型包括：
 - MetricParameter: 指标参数
 - Skill: 技能
 - SkillParameter: 技能参数
+- Dashboard: 大屏
+- Panel: 面板
 """
 
 import logging
@@ -229,6 +231,64 @@ class SkillParameter(Base):
 
     def __repr__(self) -> str:
         return f"<SkillParameter(id={self.id!r}, name={self.name!r})>"
+
+
+class Dashboard(Base):
+    """大屏模型
+
+    存储用户创建的数据大屏配置，包含名称、时间戳和面板数量。
+    名称系统内唯一，最长64字符；面板数量上限12个。
+    """
+
+    __tablename__ = "dashboards"
+
+    id = Column(Text, primary_key=True, comment="大屏唯一标识（UUID字符串）")
+    name = Column(Text, unique=True, nullable=False, comment="大屏名称（最长64字符，唯一）")
+    created_at = Column(Text, nullable=False, default=_iso_now, comment="创建时间（ISO 8601）")
+    updated_at = Column(Text, nullable=False, default=_iso_now, onupdate=_iso_now, comment="最后修改时间（ISO 8601）")
+    last_accessed_at = Column(Text, nullable=False, default=_iso_now, comment="最近访问时间（ISO 8601）")
+    panel_count = Column(Integer, nullable=False, default=0, comment="面板数量（上限12）")
+
+    # 关联关系
+    panels = relationship("Panel", back_populates="dashboard", cascade="all, delete-orphan")
+
+    def __repr__(self) -> str:
+        return f"<Dashboard(id={self.id!r}, name={self.name!r})>"
+
+
+class Panel(Base):
+    """面板模型
+
+    存储大屏中的单个数据面板配置，包含标题、SQL查询、图表类型和布局位置。
+    图表类型支持：table/bar/line/pie。
+    布局约束：pos_x 范围 0-11，pos_w 最小3，pos_h 最小2。
+    """
+
+    __tablename__ = "panels"
+
+    id = Column(Text, primary_key=True, comment="面板唯一标识（UUID字符串）")
+    dashboard_id = Column(
+        Text,
+        ForeignKey("dashboards.id", ondelete="CASCADE"),
+        nullable=False,
+        comment="所属大屏ID",
+    )
+    title = Column(Text, nullable=False, comment="面板标题")
+    sql = Column(Text, nullable=False, comment="查询SQL（使用相对时间函数）")
+    chart_type = Column(Text, nullable=False, comment="图表类型（table/bar/line/pie）")
+    pos_x = Column(Integer, nullable=False, comment="网格X位置（0-11）")
+    pos_y = Column(Integer, nullable=False, comment="网格Y位置")
+    pos_w = Column(Integer, nullable=False, comment="宽度列数（最小3）")
+    pos_h = Column(Integer, nullable=False, comment="高度行数（最小2）")
+    sort_order = Column(Integer, nullable=False, comment="排序序号")
+    created_at = Column(Text, nullable=False, default=_iso_now, comment="创建时间（ISO 8601）")
+    updated_at = Column(Text, nullable=False, default=_iso_now, onupdate=_iso_now, comment="更新时间（ISO 8601）")
+
+    # 关联关系
+    dashboard = relationship("Dashboard", back_populates="panels")
+
+    def __repr__(self) -> str:
+        return f"<Panel(id={self.id!r}, title={self.title!r})>"
 
 
 # ============================================================

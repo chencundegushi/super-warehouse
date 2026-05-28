@@ -14,6 +14,9 @@ import {
   HistoryOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  ApartmentOutlined,
+  SettingOutlined,
+  FundProjectionScreenOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import type { MenuProps } from 'antd'
@@ -46,9 +49,24 @@ const menuItems: MenuProps['items'] = [
     label: 'DDL管理',
   },
   {
+    key: '/lineage',
+    icon: <ApartmentOutlined />,
+    label: '表血缘',
+  },
+  {
+    key: '/dashboards',
+    icon: <FundProjectionScreenOutlined />,
+    label: '智能大屏',
+  },
+  {
     key: '/history',
     icon: <HistoryOutlined />,
     label: '历史记录',
+  },
+  {
+    key: '/settings',
+    icon: <SettingOutlined />,
+    label: '系统设置',
   },
 ]
 
@@ -97,8 +115,15 @@ function MainLayout() {
     setCollapsed((prev) => !prev)
   }, [])
 
-  // 4.确定当前选中的菜单项
-  const selectedKey = location.pathname === '/' ? '/chat' : location.pathname
+  // 4.确定当前选中的菜单项（支持子路由高亮父级菜单）
+  const getSelectedKey = () => {
+    const path = location.pathname
+    if (path === '/') return '/chat'
+    // Dashboard 子路由统一高亮"智能大屏"菜单
+    if (path.startsWith('/dashboards')) return '/dashboards'
+    return path
+  }
+  const selectedKey = getSelectedKey()
 
   return (
     <Layout style={{ height: '100%' }}>

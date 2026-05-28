@@ -1,8 +1,8 @@
 """
 DramaTalk 平台经营数据查询脚本
 
-从 Doris 数仓查询指定月份的核心经营指标，输出 JSON 格式结果。
-供 LLM 经营分析使用。
+查询指定月份的核心经营指标（含上月环比数据），输出 JSON 格式。
+支持大盘总览 + 分包（DT/DTL）维度。
 
 使用方式:
     python query_business_data.py --month 2026-04
@@ -18,9 +18,8 @@ from datetime import datetime
 import pymysql
 
 
-# 默认数据库配置（可通过环境变量或参数覆盖）
 DEFAULT_CONFIG = {
-    "host": os.environ.get("DORIS_HOST", "192.168.5.56"),
+    "host": os.environ.get("DORIS_HOST", "127.0.0.1"),
     "port": int(os.environ.get("DORIS_PORT", "3308")),
     "user": os.environ.get("DORIS_USER", "dramatalk_report"),
     "password": os.environ.get("DORIS_PASSWORD", "dramatalk_report"),
@@ -43,292 +42,227 @@ def get_connection(config: dict):
     )
 
 
-def query_recharge(conn, month: str) -> dict:
-    """查询充值数据。"""
-    start_date = f"{month}-01"
-    # 计算下月第一天
+def month_range(month: str) -> tuple[str, str]:
+    """返回月份的起止日期。"""
     year, mon = int(month[:4]), int(month[5:7])
+    start = f"{year}-{mon:02d}-01"
     if mon == 12:
-        end_date = f"{year+1}-01-01"
+        end = f"{year + 1}-01-01"
     else:
-        end_date = f"{year}-{mon+1:02d}-01"
+        end = f"{year}-{mon + 1:02d}-01"
+    return start, end
 
-    sql = f"""
+
+def prev_month(month: str) -> str:
+    """返回上一个月份字符串。"""
+    year, mon = int(month[:4]), int(month[5:7])
+    if mon == 1:
+        return f"{year - 1}-12"
+    return f"{year}-{mon - 1:02d}"
+
+
+def query_overview(conn, month: str) -> dict:
+    """查询大盘核心指标（全包汇总）。"""
+    start, end = month_range(month)
+
+    # 充值数据
+    sql_recharge = f"""
     SELECT
-        COUNT(*) as order_count,
-        SUM(money) as total_amount,
-        SUM(CASE WHEN recharge_type=0 THEN money ELSE 0 END) as recharge_amount,
-        SUM(CASE WHEN recharge_type=1 THEN money ELSE 0 END) as subscribe_amount,
-        SUM(CASE WHEN recharge_type=1 AND subscribe_renew=0 THEN money ELSE 0 END) as new_subscribe_amount,
-        SUM(CASE WHEN recharge_type=1 AND subscribe_renew=1 THEN money ELSE 0 END) as renewal_amount,
-        SUM(CASE WHEN type='APPLE' THEN money ELSE 0 END) as apple_amount,
-        SUM(CASE WHEN type='GOOGLE' THEN money ELSE 0 END) as google_amount,
-        COUNT(DISTINCT user_id) as paying_users,
-        SUM(no_tax_money) as no_tax_total
+        SUM(money) as total_recharge,
+        SUM(no_tax_money) as no_tax_recharge,
+        SUM(CASE WHEN recharge_type=0 THEN money ELSE 0 END) as coin_recharge,
+        SUM(CASE WHEN recharge_type=1 THEN money ELSE 0 END) as subscribe_recharge,
+        COUNT(DISTINCT user_id) as paying_users
     FROM dws_order
-    WHERE create_time >= '{start_date}' AND create_time < '{end_date}'
+    WHERE create_time >= '{start}' AND create_time < '{end}'
     """
     with conn.cursor() as cur:
-        cur.execute(sql)
-        row = cur.fetchone()
+        cur.execute(sql_recharge)
+        r = cur.fetchone()
 
-    # 日维度充值趋势
-    sql_daily = f"""
-    SELECT DATE(create_time) as dt, SUM(money) as daily_amount, COUNT(*) as daily_count
-    FROM dws_order
-    WHERE create_time >= '{start_date}' AND create_time < '{end_date}'
-    GROUP BY DATE(create_time) ORDER BY dt
-    """
-    with conn.cursor() as cur:
-        cur.execute(sql_daily)
-        daily = cur.fetchall()
-
-    return {
-        "total_amount_usd": float(row["total_amount"] or 0),
-        "order_count": int(row["order_count"] or 0),
-        "recharge_amount_usd": float(row["recharge_amount"] or 0),
-        "subscribe_amount_usd": float(row["subscribe_amount"] or 0),
-        "new_subscribe_amount_usd": float(row["new_subscribe_amount"] or 0),
-        "renewal_amount_usd": float(row["renewal_amount"] or 0),
-        "apple_amount_usd": float(row["apple_amount"] or 0),
-        "google_amount_usd": float(row["google_amount"] or 0),
-        "paying_users": int(row["paying_users"] or 0),
-        "no_tax_total_usd": float(row["no_tax_total"] or 0),
-        "arpu": round(float(row["total_amount"] or 0) / max(int(row["paying_users"] or 1), 1), 2),
-        "daily_trend": [{"date": str(d["dt"]), "amount": float(d["daily_amount"])} for d in daily],
-    }
-
-
-def query_new_users(conn, month: str) -> dict:
-    """查询新增用户数据。"""
-    start_date = f"{month}-01"
-    year, mon = int(month[:4]), int(month[5:7])
-    end_date = f"{year}-{mon+1:02d}-01" if mon < 12 else f"{year+1}-01-01"
-
-    sql = f"""
-    SELECT COUNT(*) as new_user_count
-    FROM dws_order
-    WHERE create_time >= '{start_date}' AND create_time < '{end_date}'
-      AND new_user = 1
-    """
-    with conn.cursor() as cur:
-        cur.execute(sql)
-        row = cur.fetchone()
-
-    # 新用户充值转化
-    sql_new_pay = f"""
-    SELECT COUNT(DISTINCT user_id) as new_paying_users
-    FROM dws_order
-    WHERE create_time >= '{start_date}' AND create_time < '{end_date}'
-      AND new_user = 1
-    """
-    with conn.cursor() as cur:
-        cur.execute(sql_new_pay)
-        pay_row = cur.fetchone()
-
-    return {
-        "new_user_orders": int(row["new_user_count"] or 0),
-        "new_paying_users": int(pay_row["new_paying_users"] or 0),
-    }
-
-
-def query_game(conn, month: str) -> dict:
-    """查询游戏消费数据。"""
-    start_date = f"{month}-01"
-    year, mon = int(month[:4]), int(month[5:7])
-    end_date = f"{year}-{mon+1:02d}-01" if mon < 12 else f"{year+1}-01-01"
-
-    sql = f"""
+    # 消耗数据（游戏、送礼、短剧）
+    sql_consume = f"""
     SELECT
-        SUM(CASE WHEN action='gameBet' THEN amount ELSE 0 END) as total_bet,
-        SUM(CASE WHEN action='gamePrize' THEN amount ELSE 0 END) as total_prize,
-        COUNT(DISTINCT CASE WHEN action='gameBet' THEN identification END) as bet_users
+        SUM(CASE WHEN action='gameBet' AND currency='bean' THEN amount ELSE 0 END) as game_bet,
+        SUM(CASE WHEN action='gamePrize' AND currency='bean' THEN amount ELSE 0 END) as game_prize,
+        SUM(CASE WHEN action='gifting' THEN amount ELSE 0 END) as gift_send,
+        SUM(CASE WHEN action='giftingIncome' THEN amount ELSE 0 END) as gift_receive,
+        SUM(CASE WHEN action='reelPurchase' AND currency='bean' THEN amount ELSE 0 END) as reel_spend,
+        COUNT(DISTINCT identification) as mau
     FROM dws_wallet_operation
-    WHERE create_time >= '{start_date}' AND create_time < '{end_date}'
-      AND action IN ('gameBet', 'gamePrize')
-      AND currency = 'bean'
+    WHERE create_time >= '{start}' AND create_time < '{end}'
     """
     with conn.cursor() as cur:
-        cur.execute(sql)
-        row = cur.fetchone()
+        cur.execute(sql_consume)
+        c = cur.fetchone()
 
-    # 各游戏分布
-    sql_games = f"""
+    # 投放成本（从 dws_total_revenue_daily）
+    sql_cost = f"""
     SELECT
-        object_id,
-        SUM(CASE WHEN action='gameBet' THEN amount ELSE 0 END) as bet_amount,
-        SUM(CASE WHEN action='gamePrize' THEN amount ELSE 0 END) as prize_amount
-    FROM dws_wallet_operation
-    WHERE create_time >= '{start_date}' AND create_time < '{end_date}'
-      AND action IN ('gameBet', 'gamePrize')
-      AND currency = 'bean'
-    GROUP BY object_id
-    ORDER BY bet_amount DESC
-    """
-    game_name_map = {"1004": "TP", "1030": "SP", "1018": "CQ", "1025": "GD"}
-    with conn.cursor() as cur:
-        cur.execute(sql_games)
-        games = cur.fetchall()
-
-    game_detail = []
-    for g in games:
-        oid = str(g["object_id"]) if g["object_id"] else "other"
-        game_detail.append({
-            "game": game_name_map.get(oid, f"其他({oid})"),
-            "bet_amount": int(g["bet_amount"] or 0),
-            "prize_amount": int(g["prize_amount"] or 0),
-            "net_revenue": int((g["bet_amount"] or 0) - (g["prize_amount"] or 0)),
-        })
-
-    return {
-        "total_bet_beans": int(row["total_bet"] or 0),
-        "total_prize_beans": int(row["total_prize"] or 0),
-        "net_revenue_beans": int((row["total_bet"] or 0) - (row["total_prize"] or 0)),
-        "bet_users": int(row["bet_users"] or 0),
-        "game_detail": game_detail,
-    }
-
-
-def query_gift(conn, month: str) -> dict:
-    """查询送礼数据。"""
-    start_date = f"{month}-01"
-    year, mon = int(month[:4]), int(month[5:7])
-    end_date = f"{year}-{mon+1:02d}-01" if mon < 12 else f"{year+1}-01-01"
-
-    sql = f"""
-    SELECT
-        SUM(CASE WHEN action='gifting' THEN amount ELSE 0 END) as send_beans,
-        SUM(CASE WHEN action='giftingIncome' THEN amount ELSE 0 END) as received_gems,
-        COUNT(DISTINCT CASE WHEN action='gifting' THEN identification END) as send_users
-    FROM dws_wallet_operation
-    WHERE create_time >= '{start_date}' AND create_time < '{end_date}'
-      AND action IN ('gifting', 'giftingIncome')
-    """
-    with conn.cursor() as cur:
-        cur.execute(sql)
-        row = cur.fetchone()
-
-    return {
-        "send_beans": int(row["send_beans"] or 0),
-        "received_gems": int(row["received_gems"] or 0),
-        "send_users": int(row["send_users"] or 0),
-    }
-
-
-def query_reel(conn, month: str) -> dict:
-    """查询短剧消费数据。"""
-    start_date = f"{month}-01"
-    year, mon = int(month[:4]), int(month[5:7])
-    end_date = f"{year}-{mon+1:02d}-01" if mon < 12 else f"{year+1}-01-01"
-
-    sql = f"""
-    SELECT
-        SUM(amount) as total_reel_spend,
-        COUNT(DISTINCT identification) as reel_users,
-        COUNT(*) as reel_transactions
-    FROM dws_wallet_operation
-    WHERE create_time >= '{start_date}' AND create_time < '{end_date}'
-      AND action = 'reelPurchase'
-      AND currency = 'bean'
-    """
-    with conn.cursor() as cur:
-        cur.execute(sql)
-        row = cur.fetchone()
-
-    return {
-        "total_spend_beans": int(row["total_reel_spend"] or 0),
-        "reel_users": int(row["reel_users"] or 0),
-        "transactions": int(row["reel_transactions"] or 0),
-        "avg_spend_per_user": round(
-            int(row["total_reel_spend"] or 0) / max(int(row["reel_users"] or 1), 1)
-        ),
-    }
-
-
-def query_active_users(conn, month: str) -> dict:
-    """查询活跃用户数据。"""
-    start_date = f"{month}-01"
-    year, mon = int(month[:4]), int(month[5:7])
-    end_date = f"{year}-{mon+1:02d}-01" if mon < 12 else f"{year+1}-01-01"
-
-    # MAU: 月内有任意操作的去重用户数
-    sql_mau = f"""
-    SELECT COUNT(DISTINCT identification) as mau
-    FROM dws_wallet_operation
-    WHERE create_time >= '{start_date}' AND create_time < '{end_date}'
-    """
-    with conn.cursor() as cur:
-        cur.execute(sql_mau)
-        mau_row = cur.fetchone()
-
-    # DAU 趋势
-    sql_dau = f"""
-    SELECT DATE(create_time) as dt, COUNT(DISTINCT identification) as dau
-    FROM dws_wallet_operation
-    WHERE create_time >= '{start_date}' AND create_time < '{end_date}'
-    GROUP BY DATE(create_time) ORDER BY dt
-    """
-    with conn.cursor() as cur:
-        cur.execute(sql_dau)
-        dau_rows = cur.fetchall()
-
-    dau_list = [int(d["dau"]) for d in dau_rows]
-    avg_dau = round(sum(dau_list) / max(len(dau_list), 1))
-
-    return {
-        "mau": int(mau_row["mau"] or 0),
-        "avg_dau": avg_dau,
-        "max_dau": max(dau_list) if dau_list else 0,
-        "min_dau": min(dau_list) if dau_list else 0,
-        "dau_mau_ratio": round(avg_dau / max(int(mau_row["mau"] or 1), 1), 3),
-        "dau_trend": [{"date": str(d["dt"]), "dau": int(d["dau"])} for d in dau_rows],
-    }
-
-
-def query_revenue_summary(conn, month: str) -> dict:
-    """查询收入汇总（从 dws_total_revenue_daily）。"""
-    start_date = f"{month}-01"
-    year, mon = int(month[:4]), int(month[5:7])
-    end_date = f"{year}-{mon+1:02d}-01" if mon < 12 else f"{year+1}-01-01"
-
-    sql = f"""
-    SELECT
-        SUM(recharge_amount) as recharge_amount,
-        SUM(subscribe_amount) as subscribe_amount,
-        SUM(ad_amount) as ad_amount,
         SUM(promotion_cost) as promotion_cost,
-        SUM(withdraws_cost) as withdraws_cost
+        SUM(recharge_amount) as rev_recharge,
+        SUM(subscribe_amount) as rev_subscribe
     FROM dws_total_revenue_daily
-    WHERE `date` >= '{start_date}' AND `date` < '{end_date}'
+    WHERE `date` >= '{start}' AND `date` < '{end}'
     """
     with conn.cursor() as cur:
-        cur.execute(sql)
-        row = cur.fetchone()
+        cur.execute(sql_cost)
+        cost = cur.fetchone()
 
-    recharge = float(row["recharge_amount"] or 0)
-    subscribe = float(row["subscribe_amount"] or 0)
-    ad = float(row["ad_amount"] or 0)
-    promotion = float(row["promotion_cost"] or 0)
-    withdraws = float(row["withdraws_cost"] or 0)
+    total_recharge = float(r["total_recharge"] or 0)
+    promotion_cost = float(cost["promotion_cost"] or 0)
+    game_bet = int(c["game_bet"] or 0)
+    gift_send = int(c["gift_send"] or 0)
+    reel_spend = int(c["reel_spend"] or 0)
 
     return {
-        "recharge_amount_usd": recharge,
-        "subscribe_amount_usd": subscribe,
-        "ad_amount_usd": ad,
-        "total_revenue_usd": round(recharge + subscribe + ad, 2),
-        "promotion_cost_usd": promotion,
-        "withdraws_cost_usd": withdraws,
-        "net_revenue_usd": round(recharge + subscribe + ad - promotion - withdraws, 2),
+        "total_recharge_usd": total_recharge,
+        "no_tax_recharge_usd": float(r["no_tax_recharge"] or 0),
+        "coin_recharge_usd": float(r["coin_recharge"] or 0),
+        "subscribe_recharge_usd": float(r["subscribe_recharge"] or 0),
+        "paying_users": int(r["paying_users"] or 0),
+        "game_bet_beans": game_bet,
+        "game_prize_beans": int(c["game_prize"] or 0),
+        "game_net_beans": game_bet - int(c["game_prize"] or 0),
+        "gift_send_beans": gift_send,
+        "gift_receive_gems": int(c["gift_receive"] or 0),
+        "reel_spend_beans": reel_spend,
+        "total_consume_beans": game_bet + gift_send + reel_spend,
+        "mau": int(c["mau"] or 0),
+        "promotion_cost_usd": promotion_cost,
+        "roi": round(total_recharge / max(promotion_cost, 1), 2),
     }
+
+
+def query_by_package(conn, month: str) -> dict:
+    """查询分包数据（DT 和 DTL）。"""
+    start, end = month_range(month)
+
+    # 分包充值
+    sql_recharge = f"""
+    SELECT
+        project_code,
+        SUM(money) as total_recharge,
+        SUM(CASE WHEN recharge_type=0 THEN money ELSE 0 END) as coin_recharge,
+        SUM(CASE WHEN recharge_type=1 THEN money ELSE 0 END) as subscribe_recharge,
+        COUNT(DISTINCT user_id) as paying_users
+    FROM dws_order
+    WHERE create_time >= '{start}' AND create_time < '{end}'
+    GROUP BY project_code
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql_recharge)
+        recharge_rows = cur.fetchall()
+
+    # 分包消耗
+    sql_consume = f"""
+    SELECT
+        project_code,
+        SUM(CASE WHEN action='gameBet' AND currency='bean' THEN amount ELSE 0 END) as game_bet,
+        SUM(CASE WHEN action='gamePrize' AND currency='bean' THEN amount ELSE 0 END) as game_prize,
+        SUM(CASE WHEN action='gifting' THEN amount ELSE 0 END) as gift_send,
+        SUM(CASE WHEN action='reelPurchase' AND currency='bean' THEN amount ELSE 0 END) as reel_spend,
+        COUNT(DISTINCT identification) as active_users
+    FROM dws_wallet_operation
+    WHERE create_time >= '{start}' AND create_time < '{end}'
+    GROUP BY project_code
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql_consume)
+        consume_rows = cur.fetchall()
+
+    # 分包投放成本
+    sql_cost = f"""
+    SELECT
+        project_code,
+        SUM(promotion_cost) as promotion_cost
+    FROM dws_total_revenue_daily
+    WHERE `date` >= '{start}' AND `date` < '{end}'
+    GROUP BY project_code
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql_cost)
+        cost_rows = cur.fetchall()
+
+    # 组装结果
+    recharge_map = {row["project_code"]: row for row in recharge_rows}
+    consume_map = {row["project_code"]: row for row in consume_rows}
+    cost_map = {row["project_code"]: row for row in cost_rows}
+
+    result = {}
+    for pkg in ["DT", "DTL"]:
+        r = recharge_map.get(pkg, {})
+        c = consume_map.get(pkg, {})
+        co = cost_map.get(pkg, {})
+
+        total_recharge = float(r.get("total_recharge") or 0)
+        promotion_cost = float(co.get("promotion_cost") or 0)
+        game_bet = int(c.get("game_bet") or 0)
+        gift_send = int(c.get("gift_send") or 0)
+        reel_spend = int(c.get("reel_spend") or 0)
+
+        result[pkg] = {
+            "total_recharge_usd": total_recharge,
+            "coin_recharge_usd": float(r.get("coin_recharge") or 0),
+            "subscribe_recharge_usd": float(r.get("subscribe_recharge") or 0),
+            "paying_users": int(r.get("paying_users") or 0),
+            "game_bet_beans": game_bet,
+            "game_prize_beans": int(c.get("game_prize") or 0),
+            "game_net_beans": game_bet - int(c.get("game_prize") or 0),
+            "gift_send_beans": gift_send,
+            "reel_spend_beans": reel_spend,
+            "total_consume_beans": game_bet + gift_send + reel_spend,
+            "active_users": int(c.get("active_users") or 0),
+            "promotion_cost_usd": promotion_cost,
+            "roi": round(total_recharge / max(promotion_cost, 1), 2),
+        }
+
+    return result
+
+
+def query_game_detail(conn, month: str) -> dict:
+    """查询各游戏投注明细（分包+分游戏）。"""
+    start, end = month_range(month)
+
+    sql = f"""
+    SELECT
+        project_code,
+        object_id,
+        SUM(CASE WHEN action='gameBet' THEN amount ELSE 0 END) as bet,
+        SUM(CASE WHEN action='gamePrize' THEN amount ELSE 0 END) as prize
+    FROM dws_wallet_operation
+    WHERE create_time >= '{start}' AND create_time < '{end}'
+      AND action IN ('gameBet', 'gamePrize')
+      AND currency = 'bean'
+    GROUP BY project_code, object_id
+    ORDER BY bet DESC
+    """
+    game_names = {"1004": "TP", "1030": "SP", "1018": "CQ", "1025": "GD"}
+
+    with conn.cursor() as cur:
+        cur.execute(sql)
+        rows = cur.fetchall()
+
+    result = {"DT": [], "DTL": []}
+    for row in rows:
+        pkg = row["project_code"] or "DT"
+        oid = str(row["object_id"]) if row["object_id"] else "other"
+        entry = {
+            "game": game_names.get(oid, f"其他({oid})"),
+            "bet_beans": int(row["bet"] or 0),
+            "prize_beans": int(row["prize"] or 0),
+            "net_beans": int((row["bet"] or 0) - (row["prize"] or 0)),
+        }
+        if pkg in result:
+            result[pkg].append(entry)
+
+    return result
 
 
 def main():
-    """主函数：解析参数，查询数据，输出 JSON。"""
+    """主函数：查询当月+上月数据，输出完整 JSON。"""
     parser = argparse.ArgumentParser(description="DramaTalk 经营数据查询")
-    parser.add_argument(
-        "--month", required=True,
-        help="查询月份，格式 YYYY-MM（如 2026-04）"
-    )
+    parser.add_argument("--month", required=True, help="查询月份 YYYY-MM")
     parser.add_argument("--host", default=None, help="Doris 地址")
     parser.add_argument("--port", type=int, default=None, help="Doris 端口")
     parser.add_argument("--user", default=None, help="Doris 用户")
@@ -353,22 +287,26 @@ def main():
     if args.password:
         config["password"] = args.password
 
-    # 查询数据
+    # 计算上月
+    prev = prev_month(args.month)
+
     try:
         conn = get_connection(config)
+
         result = {
             "month": args.month,
+            "prev_month": prev,
             "query_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "recharge": query_recharge(conn, args.month),
-            "new_users": query_new_users(conn, args.month),
-            "game": query_game(conn, args.month),
-            "gift": query_gift(conn, args.month),
-            "reel": query_reel(conn, args.month),
-            "active_users": query_active_users(conn, args.month),
-            "revenue_summary": query_revenue_summary(conn, args.month),
+            "overview": query_overview(conn, args.month),
+            "overview_prev": query_overview(conn, prev),
+            "by_package": query_by_package(conn, args.month),
+            "by_package_prev": query_by_package(conn, prev),
+            "game_detail": query_game_detail(conn, args.month),
         }
+
         conn.close()
         print(json.dumps(result, ensure_ascii=False, indent=2))
+
     except Exception as e:
         print(json.dumps({"error": str(e)}, ensure_ascii=False))
         sys.exit(1)

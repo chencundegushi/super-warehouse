@@ -29,6 +29,9 @@ class StreamEventType(str, Enum):
     chart_recommendation = "chart_recommendation"
     error = "error"
     clarification = "clarification"
+    panel_created = "panel_created"
+    panel_updated = "panel_updated"
+    panel_removed = "panel_removed"
 
 
 class ChartType(str, Enum):
@@ -60,6 +63,9 @@ class QueryRequest(BaseModel):
     )
     auto_execute: bool = Field(
         True, alias="autoExecute", description="是否自动执行SQL（跳过确认）"
+    )
+    mode: Optional[str] = Field(
+        None, description="Agent 工作模式，'dashboard_builder' 表示大屏构建模式"
     )
 
     model_config = {"populate_by_name": True}

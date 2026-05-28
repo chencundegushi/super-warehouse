@@ -7,9 +7,11 @@
 from app.models.database import (
     Base,
     Conversation,
+    Dashboard,
     Message,
     Metric,
     MetricParameter,
+    Panel,
     Skill,
     SkillParameter,
     async_session_factory,
@@ -22,9 +24,11 @@ from app.models.database import (
 __all__ = [
     "Base",
     "Conversation",
+    "Dashboard",
     "Message",
     "Metric",
     "MetricParameter",
+    "Panel",
     "Skill",
     "SkillParameter",
     "async_session_factory",

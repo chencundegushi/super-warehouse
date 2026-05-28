@@ -39,15 +39,17 @@ SYSTEM_PROMPT = """你是一个专业的 Apache Doris SQL 生成助手。你的�
 5. 如果用户意图不明确，返回 clarification_needed=true 并说明需要澄清的内容
 6. 为生成的 SQL 提供简洁的中文解释
 
-输出格式（JSON）：
+输出格式（严格 JSON，sql 字段必须为单行字符串，不允许换行）：
 {
-  "sql": "生成的SQL语句",
+  "sql": "生成的SQL语句（单行，不要换行）",
   "explanation": "SQL的中文解释说明",
   "confidence": 0.0-1.0之间的置信度,
   "referenced_tables": ["引用的表名列表"],
   "clarification_needed": false,
   "clarification_message": ""
-}"""
+}
+
+重要：输出必须是合法的 JSON 格式。sql 字段中的 SQL 语句必须写在一行内，不要使用换行符。"""
 
 
 # SQL 修正系统提示词
@@ -59,13 +61,15 @@ REFINE_SYSTEM_PROMPT = """你是一个专业的 Apache Doris SQL 修正助手。
 3. 生成的 SQL 必须兼容 Apache Doris 语法
 4. 为修正后的 SQL 提供简洁的中文解释
 
-输出格式（JSON）：
+输出格式（严格 JSON，sql 字段必须为单行字符串，不允许换行）：
 {
-  "sql": "修正后的SQL语句",
+  "sql": "修正后的SQL语句（单行，不要换行）",
   "explanation": "修正说明",
   "confidence": 0.0-1.0之间的置信度,
   "referenced_tables": ["引用的表名列表"]
-}"""
+}
+
+重要：输出必须是合法的 JSON 格式。sql 字段中的 SQL 语句必须写在一行内，不要使用换行符。"""
 
 # 参考 SQL 生成系统提示词
 REFERENCE_SQL_SYSTEM_PROMPT = """你是一个专业的 Apache Doris SQL 生成助手。根据指标名称和用途说明，结合提供的数据库表结构（DDL），生成一个参考 SQL 语句。
@@ -215,7 +219,7 @@ class SQLGenerator:
         # 注入当前时间到系统提示词
         from datetime import datetime
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        system_prompt = system_prompt.format(current_time=current_time)
+        system_prompt = system_prompt.replace("{current_time}", current_time)
 
         try:
             response = self.client.chat.completions.create(
@@ -236,10 +240,52 @@ class SQLGenerator:
             logger.error("LLM call failed, error=%s", str(e))
             raise LLMCallError(f"LLM call failed: {e}") from e
 
+    def _fix_json_newlines(self, json_str: str) -> str:
+        """修复 JSON 字符串值中未转义的换行符
+
+        LLM 生成的 JSON 中，字符串值（如 SQL 语句）可能包含原始换行符，
+        这会导致 json.loads 解析失败。此方法将字符串值内的原始换行替换为空格。
+
+        Args:
+            json_str: 可能包含未转义换行的 JSON 文本
+
+        Returns:
+            修复后的 JSON 文本
+        """
+        # 逐字符扫描，在字符串值内部将 \n 替换为空格
+        result = []
+        in_string = False
+        i = 0
+        while i < len(json_str):
+            ch = json_str[i]
+            if ch == '\\' and in_string:
+                # 转义字符，保留原样并跳过下一个字符
+                result.append(ch)
+                i += 1
+                if i < len(json_str):
+                    result.append(json_str[i])
+                i += 1
+                continue
+            if ch == '"':
+                in_string = not in_string
+                result.append(ch)
+            elif ch == '\n' and in_string:
+                # 字符串值内的原始换行，替换为空格
+                result.append(' ')
+            elif ch == '\r' and in_string:
+                # 跳过 \r
+                pass
+            else:
+                result.append(ch)
+            i += 1
+        return ''.join(result)
+
     def _parse_llm_response(self, response: str) -> dict:
         """解析 LLM 响应为 JSON 字典
 
-        尝试从 LLM 响应中提取 JSON 内容，支持 markdown 代码块格式。
+        尝试从 LLM 响应中提取 JSON 内容，支持 markdown 代码块格式、
+        thinking 标签包裹、以及 JSON 前后有额外文本的情况。
+        当 JSON 解析失败时，尝试修复字符串值中未转义的换行符后重试。
 
         Args:
             response: LLM 原始响应文本
@@ -250,19 +296,63 @@ class SQLGenerator:
         Raises:
             SQLGeneratorError: JSON 解析失败时抛出
         """
+        # 0.移除可能的 <think>...</think> 标签内容
+        cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+
         # 1.尝试提取 markdown 代码块中的 JSON
-        json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', response, re.DOTALL)
+        json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', cleaned, re.DOTALL)
         if json_match:
             json_str = json_match.group(1).strip()
-        else:
-            # 2.尝试直接解析整个响应
-            json_str = response.strip()
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                # 尝试修复字符串值中的换行符
+                fixed = self._fix_json_newlines(json_str)
+                try:
+                    return json.loads(fixed)
+                except json.JSONDecodeError:
+                    pass
 
+        # 2.尝试直接解析整个响应
         try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            logger.error("Failed to parse LLM response as JSON, error=%s", str(e))
-            raise SQLGeneratorError(f"Failed to parse LLM response: {e}") from e
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # 3.尝试提取第一个 JSON 对象（花括号匹配）
+        brace_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
+        if brace_match:
+            json_str = brace_match.group(0)
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                fixed = self._fix_json_newlines(json_str)
+                try:
+                    return json.loads(fixed)
+                except json.JSONDecodeError:
+                    pass
+
+        # 4.最后尝试：找到第一个 { 和最后一个 } 之间的内容
+        first_brace = cleaned.find('{')
+        last_brace = cleaned.rfind('}')
+        if first_brace != -1 and last_brace > first_brace:
+            json_str = cleaned[first_brace:last_brace + 1]
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                # 尝试修复换行符后重试
+                fixed = self._fix_json_newlines(json_str)
+                try:
+                    return json.loads(fixed)
+                except json.JSONDecodeError as e:
+                    logger.error(
+                        "Failed to parse LLM response as JSON, error=%s, response_preview=%s",
+                        str(e), cleaned[:200],
+                    )
+                    raise SQLGeneratorError(f"Failed to parse LLM response: {e}") from e
+
+        logger.error("No JSON found in LLM response, response_preview=%s", cleaned[:200])
+        raise SQLGeneratorError("No JSON object found in LLM response")
 
     def generate_sql(self, params: SQLGenParams) -> SQLGenResult:
         """根据自然语言和上下文生成 SQL

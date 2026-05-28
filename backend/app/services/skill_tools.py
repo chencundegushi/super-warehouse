@@ -1,21 +1,15 @@
 """
-Skill Tools 动态加载器
+Skill Tools 脚本执行器
 
-从 backend/skills/ 目录自动加载所有技能并注册为 LangChain Tool。
-每个技能目录需包含 SKILL.md（描述）和至少一个 .py 脚本。
-
-加载规则：
-- 读取 SKILL.md 的 frontmatter 获取 name、description
-- 找到目录下的 .py 脚本作为执行入口
-- 自动生成 BaseTool 子类，执行时调用 python 脚本
-- 脚本参数通过 JSON 字符串传入（--params '{...}'）
-- 支持热加载：调用 load_skill_tools() 即可刷新
+为 deepagents 原生 Skills 提供脚本执行能力。
+deepagents 负责 Skill 发现和 progressive disclosure（SKILL.md 加载），
+本模块提供自定义 Tool 让 agent 能够执行 skills 目录下的 Python 脚本。
 
 技能目录结构示例：
     backend/skills/
     ├── business-analysis/
-    │   ├── SKILL.md
-    │   └── query_business_data.py
+    │   ├── SKILL.md          ← deepagents 原生加载
+    │   └── query_business_data.py  ← 通过本模块的 Tool 执行
     └── another-skill/
         ├── SKILL.md
         └── main.py
@@ -40,44 +34,20 @@ logger = logging.getLogger(__name__)
 SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
 
 
-class SkillInput(BaseModel):
-    """通用技能工具输入
+class SkillScriptInput(BaseModel):
+    """技能脚本执行工具输入
 
-    所有参数通过 JSON 字符串传递，由脚本自行解析。
+    Attributes:
+        skill_name: 技能目录名称（如 business-analysis）
+        params_json: 脚本参数 JSON 字符串
     """
+    skill_name: str = Field(
+        description="技能目录名称，如 'business-analysis'"
+    )
     params_json: str = Field(
         default="{}",
-        description="技能参数 JSON 字符串。具体参数见工具描述。"
+        description="脚本参数 JSON 字符串，如 {\"month\": \"2026-04\"}"
     )
-
-
-def _parse_skill_md(skill_md_path: Path) -> dict:
-    """解析 SKILL.md 的 frontmatter
-
-    Args:
-        skill_md_path: SKILL.md 文件路径
-
-    Returns:
-        包含 name、description、allowed_tools 的字典
-    """
-    content = skill_md_path.read_text(encoding="utf-8")
-    result = {"name": "", "description": "", "content": content}
-
-    if content.startswith("---"):
-        end = content.find("---", 3)
-        if end > 0:
-            frontmatter = content[3:end].strip()
-            for line in frontmatter.split("\n"):
-                if ":" in line:
-                    key, val = line.split(":", 1)
-                    key = key.strip().lower().replace("-", "_")
-                    val = val.strip()
-                    if key == "name":
-                        result["name"] = val
-                    elif key == "description":
-                        result["description"] = val
-
-    return result
 
 
 def _find_script(skill_dir: Path) -> Path | None:
@@ -109,93 +79,113 @@ def _find_script(skill_dir: Path) -> Path | None:
     return None
 
 
-def _create_skill_tool(skill_dir: Path, meta: dict, script_path: Path) -> BaseTool:
-    """为单个技能创建 Tool 实例
+class RunSkillScriptTool(BaseTool):
+    """执行技能脚本工具
 
-    Args:
-        skill_dir: 技能目录
-        meta: SKILL.md 解析结果
-        script_path: 脚本路径
-
-    Returns:
-        BaseTool 实例
+    在 skills 目录下找到指定技能的 Python 脚本并执行。
+    自动注入数据库连接参数。
     """
-    skill_name = meta["name"] or skill_dir.name
-    skill_desc = meta["description"] or f"技能：{skill_name}"
+    name: str = "run_skill_script"
+    description: str = (
+        "执行指定技能目录下的 Python 脚本。"
+        "可用技能：business-analysis（DramaTalk 平台经营数据查询，参数：month=YYYY-MM）。"
+        "脚本会连接数据库查询数据并返回 JSON 结果。"
+    )
+    args_schema: Type[BaseModel] = SkillScriptInput
 
-    # Tool name 只能用 ASCII
-    tool_name = f"skill_{re.sub(r'[^a-zA-Z0-9_]', '_', skill_dir.name)}"
+    def _run(self, skill_name: str, params_json: str = "{}") -> str:
+        """执行技能脚本
 
-    # 捕获到闭包
-    _script = str(script_path)
-    _cwd = str(skill_dir)
-    _skill_content = meta.get("content", "")
+        Args:
+            skill_name: 技能目录名称
+            params_json: 参数 JSON 字符串
 
-    class DynamicSkillTool(BaseTool):
-        """动态加载的技能工具"""
-        name: str = tool_name
-        description: str = skill_desc
-        args_schema: Type[BaseModel] = SkillInput
+        Returns:
+            脚本输出（通常为 JSON）
+        """
+        logger.info(
+            "Skill script execution requested, skill_name=%s, params=%s",
+            skill_name, params_json[:200],
+        )
 
-        def _run(self, params_json: str = "{}") -> str:
-            """执行技能脚本"""
-            logger.info("Skill tool called, name=%s, params=%s", skill_name, params_json[:200])
+        # 1.查找技能目录
+        skill_dir = SKILLS_DIR / skill_name
+        if not skill_dir.exists() or not skill_dir.is_dir():
+            available = [d.name for d in SKILLS_DIR.iterdir() if d.is_dir()] if SKILLS_DIR.exists() else []
+            return json.dumps({
+                "error": f"技能 '{skill_name}' 不存在。可用技能：{available}"
+            }, ensure_ascii=False)
 
-            try:
-                params = json.loads(params_json) if params_json else {}
-            except json.JSONDecodeError:
-                params = {}
+        # 2.查找脚本
+        script = _find_script(skill_dir)
+        if not script:
+            return json.dumps({
+                "error": f"技能 '{skill_name}' 目录下未找到可执行的 Python 脚本"
+            }, ensure_ascii=False)
 
-            # 构建命令行参数
-            cmd = [sys.executable, _script]
+        # 3.解析参数
+        try:
+            params = json.loads(params_json) if params_json else {}
+        except json.JSONDecodeError:
+            params = {}
 
-            # 将 JSON 参数展开为命令行参数（--key value）
-            for key, value in params.items():
-                cmd.append(f"--{key}")
-                cmd.append(str(value))
+        # 4.构建命令行
+        cmd = [sys.executable, str(script)]
 
-            # 注入数据库连接参数（如果脚本支持）
-            if "--host" not in cmd:
-                cmd.extend(["--host", settings.doris_host])
-            if "--port" not in cmd:
-                cmd.extend(["--port", str(settings.doris_port)])
-            if "--user" not in cmd:
-                cmd.extend(["--user", settings.doris_user])
-            if "--password" not in cmd:
-                cmd.extend(["--password", settings.doris_password])
+        # 将 JSON 参数展开为命令行参数（--key value）
+        for key, value in params.items():
+            cmd.append(f"--{key}")
+            cmd.append(str(value))
 
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    cwd=_cwd,
+        # 注入数据库连接参数
+        if "--host" not in cmd:
+            cmd.extend(["--host", settings.doris_host])
+        if "--port" not in cmd:
+            cmd.extend(["--port", str(settings.doris_port)])
+        if "--user" not in cmd:
+            cmd.extend(["--user", settings.doris_user])
+        if "--password" not in cmd:
+            cmd.extend(["--password", settings.doris_password])
+
+        # 5.执行脚本
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=str(skill_dir),
+            )
+
+            if result.returncode != 0:
+                error_detail = result.stderr.strip() or result.stdout.strip()
+                logger.error(
+                    "Skill script failed, skill_name=%s, stderr=%s, stdout=%s",
+                    skill_name, result.stderr[:300], result.stdout[:300],
                 )
+                return json.dumps({
+                    "error": f"脚本执行失败：{error_detail[:500]}"
+                }, ensure_ascii=False)
 
-                if result.returncode != 0:
-                    logger.error("Skill script failed, name=%s, stderr=%s", skill_name, result.stderr[:300])
-                    return json.dumps({
-                        "error": f"脚本执行失败：{result.stderr[:200]}"
-                    }, ensure_ascii=False)
+            output = result.stdout.strip()
+            logger.info(
+                "Skill script completed, skill_name=%s, output_length=%d",
+                skill_name, len(output),
+            )
+            return output
 
-                output = result.stdout.strip()
-                logger.info("Skill script completed, name=%s, output_length=%d", skill_name, len(output))
-                return output
-
-            except subprocess.TimeoutExpired:
-                return json.dumps({"error": "脚本执行超时（60秒）"}, ensure_ascii=False)
-            except Exception as e:
-                logger.error("Skill script error, name=%s, error=%s", skill_name, str(e))
-                return json.dumps({"error": f"执行错误：{str(e)}"}, ensure_ascii=False)
-
-    return DynamicSkillTool()
+        except subprocess.TimeoutExpired:
+            logger.error("Skill script timeout, skill_name=%s", skill_name)
+            return json.dumps({"error": "脚本执行超时（120秒）"}, ensure_ascii=False)
+        except Exception as e:
+            logger.error("Skill script error, skill_name=%s, error=%s", skill_name, str(e))
+            return json.dumps({"error": f"执行错误：{str(e)}"}, ensure_ascii=False)
 
 
 def load_skill_tools() -> list[BaseTool]:
-    """从 backend/skills/ 目录动态加载所有技能
+    """加载技能脚本执行工具
 
-    扫描每个子目录，解析 SKILL.md，找到脚本，创建 Tool。
+    返回一个通用的脚本执行工具，agent 可通过指定 skill_name 执行任意技能脚本。
 
     Returns:
         技能 Tool 列表
@@ -207,29 +197,17 @@ def load_skill_tools() -> list[BaseTool]:
         SKILLS_DIR.mkdir(parents=True, exist_ok=True)
         return tools
 
+    # 检查是否有可用的技能（至少有一个目录包含 .py 脚本）
+    has_skills = False
     for skill_dir in SKILLS_DIR.iterdir():
-        if not skill_dir.is_dir():
-            continue
+        if skill_dir.is_dir() and _find_script(skill_dir):
+            has_skills = True
+            break
 
-        # 必须有 SKILL.md
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            logger.debug("Skipping %s: no SKILL.md", skill_dir.name)
-            continue
+    if has_skills:
+        tools.append(RunSkillScriptTool())
+        logger.info("Loaded run_skill_script tool, skills_dir=%s", SKILLS_DIR)
+    else:
+        logger.info("No executable skills found in %s", SKILLS_DIR)
 
-        # 解析元数据
-        meta = _parse_skill_md(skill_md)
-
-        # 找到脚本
-        script = _find_script(skill_dir)
-        if not script:
-            logger.warning("Skipping %s: no .py script found", skill_dir.name)
-            continue
-
-        # 创建 Tool
-        tool = _create_skill_tool(skill_dir, meta, script)
-        tools.append(tool)
-        logger.info("Loaded skill tool: %s (%s)", tool.name, meta.get("name", skill_dir.name))
-
-    logger.info("Loaded %d skill tools from %s", len(tools), SKILLS_DIR)
     return tools

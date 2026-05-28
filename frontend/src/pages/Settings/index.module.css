@@ -1,0 +1,101 @@
+/**
+ * 系统设置页面样式
+ */
+
+.settingsContainer {
+  padding: var(--spacing-lg);
+  max-width: 900px;
+  margin: 0 auto;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.pageTitle {
+  margin-bottom: var(--spacing-lg);
+}
+
+/* 配置区块 */
+.section {
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md);
+  background: var(--color-bg-elevated);
+  border-radius: var(--border-radius-lg);
+  border: 1px solid var(--color-border-secondary);
+}
+
+.sectionTitle {
+  font-size: 15px;
+  font-weight: 500;
+  margin-bottom: var(--spacing-md);
+  color: var(--color-text-primary, #e0e0e0);
+}
+
+/* 系统信息网格 */
+.infoGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.infoItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-bg-container);
+  border-radius: var(--border-radius-md, 4px);
+  border: 1px solid var(--color-border-secondary);
+}
+
+.infoLabel {
+  font-size: 12px;
+  color: var(--color-text-secondary, #999);
+  min-width: 100px;
+  flex-shrink: 0;
+}
+
+.infoValue {
+  font-size: 13px;
+  color: var(--color-text-primary, #e0e0e0);
+  word-break: break-all;
+}
+
+/* 快捷标签管理 */
+.suggestionList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.suggestionRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-bg-container);
+  border-radius: var(--border-radius-md, 4px);
+  border: 1px solid var(--color-border-secondary);
+}
+
+.suggestionRow:hover {
+  border-color: var(--color-primary);
+}
+
+.suggestionIndex {
+  font-size: 12px;
+  color: var(--color-text-secondary, #999);
+  min-width: 20px;
+}
+
+.suggestionInputs {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+}
+
+.actionBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: var(--spacing-md);
+}

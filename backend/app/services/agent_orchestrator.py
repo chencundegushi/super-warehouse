@@ -9,6 +9,7 @@ Agent Orchestrator 服务（智能体编排器）
 - handle_confirmation(): 处理用户对 SQL 的确认/拒绝
 - cancel_query(): 取消正在执行的查询
 - 会话状态管理（pending_sql、conversation_id）
+- Dashboard Builder 模式：当 mode="dashboard_builder" 时，注册 dashboard tools
 """
 
 import logging
@@ -23,6 +24,7 @@ from app.models.schemas import (
     StreamEventType,
 )
 from app.services.conversation_manager import conversation_manager
+from app.services.dashboard_tools import load_dashboard_tools, reset_panel_state
 from app.services.langchain_agent import data_query_agent
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,7 @@ class SessionState:
         pending_sql: 待确认的 SQL 语句
         pending_explanation: 待确认 SQL 的解释
         last_query: 最近一次用户查询
+        mode: Agent 工作模式（None 或 'dashboard_builder'）
     """
 
     def __init__(self, session_id: str) -> None:
@@ -57,6 +60,7 @@ class SessionState:
         self.pending_sql: Optional[str] = None
         self.pending_explanation: Optional[str] = None
         self.last_query: Optional[str] = None
+        self.mode: Optional[str] = None
 
     def clear_pending(self) -> None:
         """清除待确认状态"""
@@ -109,6 +113,7 @@ class AgentOrchestrator:
 
         调用 LangChain Agent 处理查询，Agent 自主决定使用指标工具
         还是生成 SQL，并编排完整的查询流程。
+        当 mode="dashboard_builder" 时，注册 dashboard tools 并使用大屏构建模式。
 
         Args:
             request: 查询请求
@@ -120,17 +125,25 @@ class AgentOrchestrator:
         message = request.message
         conversation_id = request.conversation_id
         auto_execute = request.auto_execute
+        mode = request.mode
 
         logger.info(
-            "Processing query, session_id=%s, message=%s, auto_execute=%s",
-            session_id, message[:100], auto_execute,
+            "Processing query, session_id=%s, message=%s, auto_execute=%s, mode=%s",
+            session_id, message[:100], auto_execute, mode,
         )
 
         # 1.获取或创建会话状态
         session = self._get_or_create_session(session_id)
         session.last_query = message
 
-        # 2.处理对话ID
+        # 2.检测 dashboard builder 模式切换
+        if mode == "dashboard_builder" and session.mode != "dashboard_builder":
+            # 首次进入大屏构建模式，重置面板状态
+            reset_panel_state()
+            logger.info("Dashboard builder mode activated, panel state reset, session_id=%s", session_id)
+        session.mode = mode
+
+        # 3.处理对话ID
         if conversation_id:
             session.conversation_id = conversation_id
         elif not session.conversation_id:
@@ -140,13 +153,13 @@ class AgentOrchestrator:
             session.conversation_id = conv.id
             logger.info("New conversation created, conversation_id=%s", session.conversation_id)
 
-        # 3.保存用户消息到对话历史
+        # 4.保存用户消息到对话历史
         await conversation_manager.add_message(
             session.conversation_id,
             MessageInput(role="user", content=message),
         )
 
-        # 4.获取对话上下文
+        # 5.获取对话上下文
         conversation_history = []
         if session.conversation_id:
             context = await conversation_manager.get_context(session.conversation_id)
@@ -157,7 +170,7 @@ class AgentOrchestrator:
                     msg_dict["sql"] = msg.sql
                 conversation_history.append(msg_dict)
 
-        # 5.调用 LangChain Agent
+        # 6.调用 LangChain Agent
         pending_sql = None
         pending_explanation = None
 
@@ -165,6 +178,8 @@ class AgentOrchestrator:
             message=message,
             conversation_history=conversation_history,
             auto_execute=auto_execute,
+            mode=mode,
+            thread_id=session_id,
         ):
             # 拦截 sql_preview 事件，保存待确认 SQL
             if event.type == StreamEventType.sql_preview:
@@ -188,7 +203,7 @@ class AgentOrchestrator:
 
             yield event
 
-        # 6.更新会话状态
+        # 7.更新会话状态
         if pending_sql and not auto_execute:
             session.pending_sql = pending_sql
             session.pending_explanation = pending_explanation
@@ -284,6 +299,7 @@ class AgentOrchestrator:
                 message=refined_message,
                 conversation_history=conversation_history,
                 auto_execute=False,
+                thread_id=session_id,
             ):
                 if event.type == StreamEventType.sql_preview:
                     session.pending_sql = event.data.get("sql")
@@ -348,6 +364,7 @@ class AgentOrchestrator:
             "conversation_id": session.conversation_id,
             "has_pending_sql": session.pending_sql is not None,
             "last_query": session.last_query,
+            "mode": session.mode,
         }
 
 

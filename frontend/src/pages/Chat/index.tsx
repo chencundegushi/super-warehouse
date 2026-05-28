@@ -9,10 +9,17 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Input, Button, Spin, Typography, Space, Switch, Tooltip } from 'antd'
-import { SendOutlined, LoadingOutlined, CloseCircleOutlined, SafetyOutlined } from '@ant-design/icons'
+import {
+  SendOutlined, LoadingOutlined, CloseCircleOutlined, SafetyOutlined,
+  BarChartOutlined, SearchOutlined, RiseOutlined, TeamOutlined,
+  DollarOutlined, ThunderboltOutlined, DatabaseOutlined,
+  LineChartOutlined, PieChartOutlined, FundOutlined,
+} from '@ant-design/icons'
 import type { Message, StreamEvent, StreamEventType, QueryResult, ChartRecommendation } from '@/types'
 import { sendMessage, confirmSQL, cancelQuery } from '@/services/chatApi'
 import { getMessages } from '@/services/conversationApi'
+import { getSuggestions } from '@/services/settingsApi'
+import type { SuggestionItem } from '@/services/settingsApi'
 import type { SSEConnection } from '@/services/sse'
 import SQLPreview from '@/components/SQLPreview'
 import ChartView from '@/components/ChartView'
@@ -31,6 +38,30 @@ const LOADING_PHASE_TEXT: Record<string, string> = {
 
 /** 长时间等待阈值（毫秒） */
 const LONG_WAIT_THRESHOLD = 10000
+
+/** 图标名称到组件的映射 */
+const ICON_MAP: Record<string, React.ReactNode> = {
+  DollarOutlined: <DollarOutlined />,
+  RiseOutlined: <RiseOutlined />,
+  BarChartOutlined: <BarChartOutlined />,
+  TeamOutlined: <TeamOutlined />,
+  ThunderboltOutlined: <ThunderboltOutlined />,
+  SearchOutlined: <SearchOutlined />,
+  DatabaseOutlined: <DatabaseOutlined />,
+  LineChartOutlined: <LineChartOutlined />,
+  PieChartOutlined: <PieChartOutlined />,
+  FundOutlined: <FundOutlined />,
+}
+
+/** 默认快捷问题（API 加载失败时使用） */
+const DEFAULT_SUGGESTIONS: SuggestionItem[] = [
+  { icon: 'DollarOutlined', label: '充值收入分析', text: '查询本月平台充值总收入，按天汇总趋势' },
+  { icon: 'RiseOutlined', label: '新增用户趋势', text: '查询最近7天每天的新增注册用户数' },
+  { icon: 'BarChartOutlined', label: '游戏消耗排行', text: '查询本月游戏消耗金额TOP10' },
+  { icon: 'TeamOutlined', label: '活跃用户统计', text: '查询最近30天的日活跃用户数趋势' },
+  { icon: 'ThunderboltOutlined', label: '送礼消耗概览', text: '查询本月送礼消耗总额及同比变化' },
+  { icon: 'SearchOutlined', label: '短剧消费分析', text: '查询本月短剧消费金额及观看人数' },
+]
 
 /**
  * 生成 UUID v4 格式的会话标识
@@ -76,6 +107,8 @@ function ChatPage() {
   // 待确认的SQL（仅确认模式下使用）
   const [pendingSQL, setPendingSQL] = useState<{ sql: string; explanation: string; source: string } | null>(null)
   const [isConfirming, setIsConfirming] = useState(false)
+  // 快捷标签（从API加载）
+  const [quickSuggestions, setQuickSuggestions] = useState<SuggestionItem[]>(DEFAULT_SUGGESTIONS)
 
   // Refs
   const sessionIdRef = useRef<string>(generateSessionId())
@@ -94,6 +127,20 @@ function ChatPage() {
   useEffect(() => {
     requireConfirmRef.current = requireConfirm
   }, [requireConfirm])
+
+  // 加载快捷标签配置
+  useEffect(() => {
+    const loadSuggestions = async () => {
+      console.log('[ChatPage] Loading quick suggestions from API')
+      try {
+        const data = await getSuggestions()
+        if (data && data.length > 0) setQuickSuggestions(data)
+      } catch (err) {
+        console.error('[ChatPage] Failed to load suggestions, using defaults:', err)
+      }
+    }
+    loadSuggestions()
+  }, [])
 
   // 加载历史消息
   useEffect(() => {
@@ -374,6 +421,20 @@ function ChatPage() {
 
   return (
     <div className={styles.chatContainer}>
+      {/* 顶部快捷场景悬浮栏 */}
+      <div className={styles.suggestionsBar}>
+        {quickSuggestions.map((item, idx) => (
+          <div
+            key={idx}
+            className={styles.suggestionChip}
+            onClick={() => { setInputValue(item.text); }}
+          >
+            <span className={styles.chipIcon}>{ICON_MAP[item.icon] || <SearchOutlined />}</span>
+            <span className={styles.chipLabel}>{item.label}</span>
+          </div>
+        ))}
+      </div>
+
       {/* 消息列表区域 */}
       <div className={styles.messageList} ref={messageListRef}>
         {isLoadingHistory && (
@@ -383,7 +444,7 @@ function ChatPage() {
         )}
         {messages.length === 0 && !isLoadingHistory && (
           <div className={styles.emptyState}>
-            <Text type="secondary">输入问题开始对话，例如："查询昨天的销售总额"</Text>
+            <Text type="secondary" className={styles.welcomeText}>输入问题开始对话，或点击下方快捷场景</Text>
           </div>
         )}
         {messages.map((msg) => (
